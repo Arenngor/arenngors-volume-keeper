@@ -1,0 +1,9 @@
+/build/
+/dist/
+*.user
+*.suo
+*.log
+*.pfx
+*.p12
+*.key
+.vs/
