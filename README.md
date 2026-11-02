@@ -1,3 +1,4 @@
+
 # Arenngor's Volume Keeper
 
 Keep Discord notification sounds below a comfortable volume. An independent,
@@ -6,6 +7,8 @@ lightweight Windows tray app with optional voice-volume defaults.
 **Status: 0.3.0-beta.1.** The notification cap and voice Apply now behavior have
 been exercised on the original user's PC. Multi-PC and installer lifecycle testing
 are still pending; see [the test checklist](docs/TESTING.md).
+
+<img width="568" height="582" alt="capture" src="https://github.com/user-attachments/assets/1ca5c5d4-9af7-4848-acc8-5f5c1f81fe1e" />
 
 ## Use the app
 
