@@ -5,47 +5,56 @@ $exe=Join-Path $repo 'build\DiscordVolumeKeeper.exe'
 Add-Type -AssemblyName System.Web.Extensions
 function Assert-True($value,$name) { if(-not $value) { throw "FAIL: $name" }; Write-Output "PASS: $name" }
 function Assert-Near($actual,$expected,$name) { Assert-True ([Math]::Abs($actual-$expected)-lt 0.0001) $name }
-$policy=New-Object DiscordKeeper.VolumePolicy
-Assert-Near ($policy.Desired('voice-a',0.05,0.30,$true)) 0.30 'Voice initializes from an inherited low level'
-$policy.Committed('voice-a',$true)
-Assert-Near ($policy.Desired('voice-a',0.45,0.30,$true)) 0.45 'Manual voice increase survives events'
-Assert-Near ($policy.Desired('voice-a',0.10,0.30,$true)) 0.10 'Manual voice decrease survives events'
-Assert-Near ($policy.Desired('voice-b',0.05,0.30,$true)) 0.30 'New voice session initializes independently'
-Assert-Near ($policy.Desired('notification',0.80,0.05,$false)) 0.05 'Notification ceiling lowers a loud session'
-Assert-Near ($policy.Desired('notification',0.02,0.05,$false)) 0.02 'Quieter notification remains quieter'
-Assert-Near ($policy.Desired('notification',0,0.05,$false)) 0 'Zero volume is preserved'
-$policy.Reset()
-Assert-Near ($policy.Desired('voice-a',0.45,0.30,$true)) 0.30 'Apply now resets voice initialization'
-$fresh=New-Object DiscordKeeper.Settings
-Assert-True (-not $fresh.VoiceDefaultEnabled) 'New users default to notification-only behavior'
-$legacy=[DiscordKeeper.Settings]::FromJson('{"NotificationCapPercent":10,"VoiceDefaultPercent":42}')
-Assert-True ($legacy.VoiceDefaultEnabled-and $legacy.NotificationCapPercent-eq 10-and $legacy.VoiceDefaultPercent-eq 42) 'Legacy users retain their saved volumes and voice behavior'
-$explicit=[DiscordKeeper.Settings]::FromJson('{"NotificationCapPercent":5,"VoiceDefaultPercent":30,"VoiceDefaultEnabled":false}')
-Assert-True (-not $explicit.VoiceDefaultEnabled) 'Explicitly disabled voice remains disabled'
+$candidate=New-Object DiscordKeeper.SessionIdentity
+$candidate.PID=123; $candidate.Group=[Guid]::NewGuid(); $candidate.Identifier='notifications'
+$other=New-Object DiscordKeeper.SessionIdentity
+$other.PID=456; $other.Group=[Guid]::NewGuid(); $other.Identifier='voice'
+$sessions=[DiscordKeeper.SessionIdentity[]]@($candidate,$other)
+Assert-True ($null -eq [DiscordKeeper.NotificationPolicy]::SkipReason($candidate,$sessions)) 'Isolated notification session is eligible'
+$originalGroup=$other.Group
+$other.Group=$candidate.Group
+Assert-True ([DiscordKeeper.NotificationPolicy]::SkipReason($candidate,$sessions) -like 'grouped*') 'Grouped voice and notification sessions are skipped'
+$other.Group=$originalGroup
+$other.Identifier=$candidate.Identifier
+Assert-True ([DiscordKeeper.NotificationPolicy]::SkipReason($candidate,$sessions) -like 'shared*') 'Multiple instances of a logical session are skipped'
+$other.Identifier='voice'; $other.PID=$candidate.PID
+Assert-True ([DiscordKeeper.NotificationPolicy]::SkipReason($candidate,$sessions) -like 'multiple*') 'Multiple sessions owned by the same process are skipped'
+$other.PID=456; $candidate.OwnerStatus=1
+Assert-True ([DiscordKeeper.NotificationPolicy]::SkipReason($candidate,$sessions) -like 'shared*') 'Non-exclusive owner status is skipped'
+Assert-Near ([DiscordKeeper.NotificationPolicy]::Ceiling(0.8,0.05)) 0.05 'Notification ceiling lowers a loud session'
+Assert-Near ([DiscordKeeper.NotificationPolicy]::Ceiling(0.02,0.05)) 0.02 'Quieter notification remains quieter'
+$targets=New-Object 'System.Collections.Generic.Dictionary[uint32,single]'
+$targets[[uint32]123]=[single]0.05
+$system=New-Object DiscordKeeper.SessionIdentity
+$system.IsSystemSounds=$true
+[float]$cap=0
+Assert-True ([DiscordKeeper.NotificationPolicy]::TryGetCap($system,$targets,[single]0.25,[ref]$cap)) 'Windows System Sounds qualifies without a Discord process'
+Assert-Near $cap 0.25 'Windows System Sounds uses its separate cap'
+Assert-True (-not [DiscordKeeper.NotificationPolicy]::TryGetCap($system,$targets,$null,[ref]$cap)) 'System Sounds stays untouched when disabled'
+$other.PID=0
+Assert-True (-not [DiscordKeeper.NotificationPolicy]::TryGetCap($other,$targets,[single]0.25,[ref]$cap)) 'PID zero alone never selects a non-System Sounds session'
+Assert-True ([DiscordKeeper.NotificationPolicy]::TryGetCap($candidate,$targets,[single]0.25,[ref]$cap)) 'Discord candidate still qualifies with System Sounds enabled'
+Assert-Near $cap 0.05 'Discord still uses its own cap'
+$legacy=[DiscordKeeper.Settings]::FromJson('{"NotificationCapPercent":10,"VoiceDefaultPercent":42,"VoiceDefaultEnabled":true}')
+Assert-True ($legacy.NotificationCapPercent-eq 10) 'Old settings retain the notification ceiling'
+Assert-True (-not $legacy.SystemSoundsCapEnabled -and $legacy.SystemSoundsCapPercent-eq 25) 'Existing settings leave the new cap off'
+$systemSettings=[DiscordKeeper.Settings]::FromJson('{"SystemSoundsCapEnabled":true,"SystemSoundsCapPercent":0}')
+Assert-True ($systemSettings.SystemSoundsCapEnabled -and $systemSettings.SystemSoundsCapPercent-eq 0) 'Zero is a valid enabled System Sounds cap'
 $serializer=New-Object System.Web.Script.Serialization.JavaScriptSerializer
-$roundtrip=[DiscordKeeper.Settings]::FromJson($serializer.Serialize($explicit))
-Assert-True (-not $roundtrip.VoiceDefaultEnabled) 'Voice toggle persists through serialization'
+Assert-True (-not $serializer.Serialize($legacy).Contains('VoiceDefault')) 'Saved settings omit obsolete voice preferences'
 $rejected=$false
 try { [DiscordKeeper.Settings]::FromJson('{"NotificationCapPercent":101}') | Out-Null } catch { $rejected=$true }
 Assert-True $rejected 'Invalid notification range rejected'
-$rejected=$false
-try { [DiscordKeeper.Settings]::FromJson('{"VoiceDefaultPercent":-1}') | Out-Null } catch { $rejected=$true }
-Assert-True $rejected 'Invalid voice range rejected'
-Assert-True ([DiscordKeeper.SessionRouter]::Role('discord --type=utility --utility-sub-type=audio.mojom.AudioService')-eq 'Notification') 'Audio service maps to notifications'
-Assert-True ([DiscordKeeper.SessionRouter]::Role('discord --type=renderer')-eq 'Voice') 'Discord child audio processes remain eligible for voice'
-Assert-True ([DiscordKeeper.SessionRouter]::Role('discord')-eq 'Voice') 'Main Discord process maps to voice'
-Assert-True ([DiscordKeeper.SessionRouter]::Role('')-eq 'Unknown') 'Unavailable command line remains unknown'
+Assert-True ([DiscordKeeper.SessionRouter]::IsNotificationCandidate('discord --type=utility --utility-sub-type=audio.mojom.AudioService')) 'Audio service remains a notification candidate'
+Assert-True (-not [DiscordKeeper.SessionRouter]::IsNotificationCandidate('discord --type=renderer')) 'Discord renderer is never targeted'
+Assert-True (-not [DiscordKeeper.SessionRouter]::IsNotificationCandidate('discord')) 'Main Discord process is never targeted'
 $notification=New-Object DiscordKeeper.Row
-$notification.PID=123; $notification.Device=1; $notification.Percent=80; $notification.Changed=$true
-$voice=New-Object DiscordKeeper.Row
-$voice.PID=456; $voice.Device=0; $voice.Percent=45
-$report=[DiscordKeeper.DiagnosticReport]::Create($explicit,[DiscordKeeper.Row[]]@($notification),[DiscordKeeper.Row[]]@($voice))
-Assert-True ($report.Contains('Notification | 123 | 1 | 5% | changed')) 'Diagnostic report reflects changed notification level'
-Assert-True ($report.Contains('Voice | 456 | 0 | 45% | unchanged')) 'Diagnostic report preserves observed voice level'
-Assert-True (-not $report.Contains($env:USERPROFILE)) 'Diagnostic report excludes the user profile path'
-Assert-True ($report.Contains('Voice defaults: disabled')) 'Diagnostic report shows disabled voice mode'
-$voice.Error='Private failure at C:\Users\PrivateUser\secret.txt'
-$safeFailure=[DiscordKeeper.DiagnosticReport]::Create($explicit,[DiscordKeeper.Row[]]@(),[DiscordKeeper.Row[]]@($voice))
+$notification.PID=123; $notification.Device=1; $notification.Percent=80
+$notification.SkipReason='grouped with another audio session'
+$report=[DiscordKeeper.DiagnosticReport]::Create($legacy,[DiscordKeeper.Row[]]@($notification))
+Assert-True ($report.Contains('Notification | 123 | 1 | 80% | skipped: grouped')) 'Diagnostics report the skipped session and unchanged volume'
+$notification.Error='Private failure at C:\Users\PrivateUser\secret.txt'
+$safeFailure=[DiscordKeeper.DiagnosticReport]::Create($legacy,[DiscordKeeper.Row[]]@($notification))
 Assert-True ($safeFailure.Contains('failed (Core Audio)')-and -not $safeFailure.Contains('PrivateUser')) 'Diagnostic failures omit private exception messages'
 $bytes=[IO.File]::ReadAllBytes($exe)
 $pe=[BitConverter]::ToInt32($bytes,0x3c)

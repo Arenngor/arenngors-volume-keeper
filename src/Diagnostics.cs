@@ -6,36 +6,35 @@ using System.Text;
 using System.Windows.Forms;
 
 namespace DiscordKeeper {
-public enum SessionRole { Unknown, Notification, Voice }
 public static class SessionRouter {
- public static SessionRole Role(string commandLine) {
-  if(String.IsNullOrWhiteSpace(commandLine)) return SessionRole.Unknown;
-  return commandLine.IndexOf("audio.mojom.AudioService",StringComparison.OrdinalIgnoreCase)>=0
-   ? SessionRole.Notification : SessionRole.Voice;
+ public static bool IsNotificationCandidate(string commandLine) {
+  return !String.IsNullOrWhiteSpace(commandLine) &&
+   commandLine.IndexOf("--utility-sub-type=audio.mojom.AudioService",StringComparison.OrdinalIgnoreCase)>=0;
  }
 }
 public static class DiagnosticReport {
- public static string Create(Settings settings,Row[] notifications,Row[] voices) {
+ public static string Create(Settings settings,Row[] rows) {
   var text=new StringBuilder();
   text.AppendLine("Arenngor's Volume Keeper "+BuildInfo.Version);
   text.AppendLine("Snapshot (UTC): "+DateTime.UtcNow.ToString("u",CultureInfo.InvariantCulture));
   text.AppendLine("Windows: "+Environment.OSVersion.Version+" | "+(Environment.Is64BitProcess?"64-bit":"32-bit")+" process");
   text.AppendLine("Notification ceiling: "+settings.NotificationCapPercent+"%");
-  text.AppendLine("Voice defaults: "+(settings.VoiceDefaultEnabled?"enabled":"disabled")+" ("+settings.VoiceDefaultPercent+"%)");
+  text.AppendLine("System Sounds ceiling: "+(settings.SystemSoundsCapEnabled ? settings.SystemSoundsCapPercent+"%" : "off"));
   text.AppendLine();
   text.AppendLine("Role | PID | output index | volume | last operation");
-  Append(text,"Notification",notifications,settings.NotificationCapPercent);
-  Append(text,"Voice",voices,settings.VoiceDefaultPercent);
-  if(notifications.Length+voices.Length==0) text.AppendLine("No recognized Discord playback sessions. Play a notification or join a call.");
+  Append(text,rows,settings);
+  if(rows.Length==0) text.AppendLine("No matching sessions yet. Play a Discord notification or a Windows system sound.");
   text.AppendLine();
-  text.AppendLine("Mapping: Discord audio service = notifications; other Discord audio processes = voice/media.");
-  text.AppendLine("This is the last event snapshot; Apply now refreshes it and may change levels.");
+  text.AppendLine("Discord audio-service sessions are candidates. Shared or ambiguous sessions are skipped.");
+  text.AppendLine("This is the last event snapshot; Save and apply refreshes it and may change levels.");
   text.AppendLine("No usernames, executable paths, command lines, conversations or audio are included.");
   return text.ToString();
  }
- static void Append(StringBuilder text,string role,Row[] rows,int target) {
+ static void Append(StringBuilder text,Row[] rows,Settings settings) {
   foreach(Row row in rows) {
-   string operation=row.Error!=null?"failed (Core Audio)":row.Changed?"changed":"unchanged";
+   string operation=row.Error!=null?"failed (Core Audio)":row.SkipReason!=null?"skipped: "+row.SkipReason:row.Changed?"changed":"unchanged";
+   string role=row.IsSystemSounds?"System Sounds":row.PID==0?"Output":"Notification";
+   int target=row.IsSystemSounds?settings.SystemSoundsCapPercent:settings.NotificationCapPercent;
    float volume=row.Changed?target:row.Percent;
    text.AppendLine(String.Format(CultureInfo.InvariantCulture,"{0} | {1} | {2} | {3:0.#}% | {4}",role,row.PID,row.Device,volume,operation));
   }

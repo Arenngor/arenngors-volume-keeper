@@ -73,11 +73,10 @@ public sealed class Watcher : ISessionEvents, IDeviceEvents, IVolumeEvents, IDis
  public int OnIconPathChanged(string path, ref Guid context) { return 0; }
  public int OnSimpleVolumeChanged(float volume, bool mute, ref Guid context) { Notify(); return 0; }
  public int OnChannelVolumeChanged(uint count, IntPtr volumes, uint channel, ref Guid context) { return 0; }
- public int OnGroupingParamChanged(ref Guid grouping, ref Guid context) { return 0; }
+ public int OnGroupingParamChanged(ref Guid grouping, ref Guid context) { Notify(); return 0; }
  public int OnStateChanged(int state) { Notify(); return 0; }
  public int OnSessionDisconnected(int reason) { Notify(); return 0; }
- public void Observe(uint[] pids) {
-  var wanted = new HashSet<uint>(pids);
+ public void Observe(Dictionary<uint,float> targets, float? systemCap) {
   foreach(string key in new List<string>(watched.Keys)) {
    int state=2; try { watched[key].GetState(out state); } catch(COMException) {}
    if(state!=2) continue;
@@ -91,8 +90,11 @@ public sealed class Watcher : ISessionEvents, IDeviceEvents, IVolumeEvents, IDis
     for(int i=0;i<count;i++) {
      IControl control=null;
      try {
-      sessions.GetSession(i,out control); uint pid; control.GetProcessId(out pid);
-      if(!wanted.Contains(pid)) continue;
+      sessions.GetSession(i,out control); uint pid;
+      int owner=control.GetProcessId(out pid);
+      var identity=new SessionIdentity { PID=pid, OwnerStatus=owner, IsSystemSounds=Audio.IsSystemSounds(control) };
+      float cap;
+      if(!NotificationPolicy.TryGetCap(identity,targets,systemCap,out cap) || (!identity.IsSystemSounds && owner!=0)) continue;
       string key; control.GetSessionInstanceIdentifier(out key);
       if(watched.ContainsKey(key)) continue;
       control.RegisterAudioSessionNotification(this); watched.Add(key,control); control=null;
@@ -154,58 +156,99 @@ public sealed class Watcher : ISessionEvents, IDeviceEvents, IVolumeEvents, IDis
  void RegisterAudioSessionNotification(IVolumeEvents events); void UnregisterAudioSessionNotification(IVolumeEvents events);
  void GetSessionIdentifier([MarshalAs(UnmanagedType.LPWStr)] out string id);
  void GetSessionInstanceIdentifier([MarshalAs(UnmanagedType.LPWStr)] out string id);
- void GetProcessId(out uint pid);
+ [PreserveSig] int GetProcessId(out uint pid);
+ [PreserveSig] int IsSystemSoundsSession();
 }
 [ComImport, Guid("87CE5498-68D6-44E5-9215-6DA47EF883D8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)] interface IVolume {
  void SetMasterVolume(float volume, ref Guid context); void GetMasterVolume(out float volume);
  void SetMute([MarshalAs(UnmanagedType.Bool)] bool mute, ref Guid context); void GetMute([MarshalAs(UnmanagedType.Bool)] out bool mute);
 }
-public class Row { public uint PID; public int Device; public float Percent; public bool Changed; public string Error; }
-public sealed class VolumePolicy {
- readonly HashSet<string> initializedVoice = new HashSet<string>();
- public float Desired(string instance, float current, float configured, bool voice) {
-  if(voice) return initializedVoice.Contains(instance) ? current : configured;
-  return Math.Min(current,configured);
+public class Row { public bool IsSystemSounds; public uint PID; public int Device; public float Percent; public bool Changed; public string Error; public string SkipReason; }
+public sealed class SessionIdentity {
+ public uint PID;
+ public int OwnerStatus;
+ public bool IsSystemSounds;
+ public Guid Group;
+ public string Identifier;
+}
+public static class NotificationPolicy {
+ public static bool TryGetCap(SessionIdentity session, Dictionary<uint,float> targets, float? systemCap, out float cap) {
+  if(!session.IsSystemSounds) return targets.TryGetValue(session.PID,out cap);
+  cap=systemCap.GetValueOrDefault();
+  return systemCap.HasValue;
  }
- public void Committed(string instance,bool voice) { if(voice) initializedVoice.Add(instance); }
- public void Reset() { initializedVoice.Clear(); }
+ public static string SkipReason(SessionIdentity candidate, IEnumerable<SessionIdentity> endpoint) {
+  if(!candidate.IsSystemSounds && candidate.OwnerStatus!=0) return "shared or unknown process ownership";
+  foreach(SessionIdentity other in endpoint) {
+   if(Object.ReferenceEquals(candidate,other)) continue;
+   if(candidate.Group!=Guid.Empty && candidate.Group==other.Group) return "grouped with another audio session";
+   if(!String.IsNullOrEmpty(candidate.Identifier) && candidate.Identifier==other.Identifier) return "shared audio session identifier";
+   if(candidate.PID!=0 && candidate.PID==other.PID) return "multiple sessions from the same process";
+  }
+  return null;
+ }
+ public static float Ceiling(float current, float cap) { return Math.Min(current,cap); }
 }
 public static class Audio {
- static readonly VolumePolicy policy = new VolumePolicy();
- public static void ResetVoice() { policy.Reset(); }
  internal static void Release(object o) { if(o != null && Marshal.IsComObject(o)) Marshal.ReleaseComObject(o); }
- public static Row[] Scan(Dictionary<uint,float> targets, bool apply, bool voice) {
+ internal static bool IsSystemSounds(IControl control) {
+  int result=control.IsSystemSoundsSession();
+  Marshal.ThrowExceptionForHR(result);
+  return result==0;
+ }
+ public static Row[] Scan(Dictionary<uint,float> targets, float? systemCap) {
   var rows = new List<Row>(); object root = null; ICollection devices = null;
+  if(targets.Count==0 && !systemCap.HasValue) return rows.ToArray();
   try {
    root = new Enumerator(); ((IDevices)root).EnumAudioEndpoints(0, 1, out devices);
    uint count; devices.GetCount(out count);
    for(uint d=0; d<count; d++) {
     IDevice device = null; object manager = null; ISessions sessions = null;
+    var identities = new List<SessionIdentity>();
+    var controls = new List<IControl>();
     try {
      devices.Item(d, out device); Guid iid = typeof(IManager).GUID;
      device.Activate(ref iid, 23, IntPtr.Zero, out manager);
      ((IManager)manager).GetSessionEnumerator(out sessions); int n; sessions.GetCount(out n);
+     // Inspect every live session on this output before changing any volume.
      for(int s=0; s<n; s++) {
       IControl control = null;
       try {
-       sessions.GetSession(s, out control); uint pid; control.GetProcessId(out pid);
-       if(!targets.ContainsKey(pid)) continue;
-       string instance; control.GetSessionInstanceIdentifier(out instance);
-       var volume = (IVolume)control; float old; volume.GetMasterVolume(out old);
-       float target = policy.Desired(instance,old,targets[pid],voice);
-       bool changed = apply && Math.Abs(old-target)>0.00001f;
-       if(changed) {
-        try { Guid context = Guid.Empty; volume.SetMasterVolume(target, ref context); }
-        catch(COMException ex) {
-         rows.Add(new Row { PID=pid, Device=(int)d, Percent=old*100, Changed=false, Error=ex.Message });
-         continue;
-        }
-       }
-       if(apply) policy.Committed(instance,voice);
-       rows.Add(new Row { PID=pid, Device=(int)d, Percent=old*100, Changed=changed });
-      } catch(COMException) {} finally { Release(control); }
+       sessions.GetSession(s, out control);
+       int state; control.GetState(out state);
+       if(state==2) continue;
+       var identity=new SessionIdentity();
+       identity.IsSystemSounds=IsSystemSounds(control);
+       identity.OwnerStatus=control.GetProcessId(out identity.PID);
+       if(!identity.IsSystemSounds) Marshal.ThrowExceptionForHR(identity.OwnerStatus);
+       control.GetGroupingParam(out identity.Group);
+       control.GetSessionIdentifier(out identity.Identifier);
+       identities.Add(identity); controls.Add(control); control=null;
+      } finally { Release(control); }
      }
-    } catch(COMException) {} finally { Release(sessions); Release(manager); Release(device); }
+     for(int s=0; s<identities.Count; s++) {
+      SessionIdentity identity=identities[s]; float cap;
+      if(!NotificationPolicy.TryGetCap(identity,targets,systemCap,out cap)) continue;
+      var row=new Row { IsSystemSounds=identity.IsSystemSounds, PID=identity.PID, Device=(int)d };
+      rows.Add(row);
+      try {
+       var volume=(IVolume)controls[s]; float old; volume.GetMasterVolume(out old);
+       row.Percent=old*100;
+       row.SkipReason=NotificationPolicy.SkipReason(identity,identities);
+       if(row.SkipReason!=null) continue;
+       float target=NotificationPolicy.Ceiling(old,cap);
+       if(old-target<=0.00001f) continue;
+       Guid context=Guid.Empty;
+       volume.SetMasterVolume(target,ref context);
+       row.Changed=true;
+      } catch(COMException ex) { row.Error=ex.Message; }
+     }
+    } catch(COMException) {
+     rows.Add(new Row { Device=(int)d, SkipReason="output session inventory unavailable" });
+    } finally {
+     foreach(IControl control in controls) Release(control);
+     Release(sessions); Release(manager); Release(device);
+    }
    }
   } finally { Release(devices); Release(root); }
   return rows.ToArray();

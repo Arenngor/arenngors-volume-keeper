@@ -14,19 +14,11 @@ function Save-Preview($form,$name) {
     try { $form.DrawToBitmap($image,[Drawing.Rectangle]::new(0,0,$form.Width,$form.Height)); $image.Save((Join-Path $OutputDirectory $name)) } finally { $image.Dispose() }
 }
 try {
-    $window=[DiscordKeeper.SettingsWindow]::new($engine,$config,[Action]{})
+    $window=[DiscordKeeper.SettingsWindow]::new($engine,$config)
     Save-Preview $window 'settings.png'
-    $flags=[Reflection.BindingFlags]'NonPublic,Instance'
-    $check=$window.GetType().GetField('voiceEnabled',$flags).GetValue($window)
-    $numeric=$window.GetType().GetField('voice',$flags).GetValue($window)
-    if($numeric.Enabled) { throw 'Fresh install voice field should be disabled.' }
-    $check.Checked=$true
-    if(-not $numeric.Enabled) { throw 'Voice field did not enable.' }
-    $check.Checked=$false
-    if($numeric.Enabled) { throw 'Voice field did not disable.' }
     $diagnostics=[DiscordKeeper.DiagnosticsWindow]::new($engine)
     Save-Preview $diagnostics 'diagnostics.png'
     $diagnostics.Close(); $diagnostics.Dispose()
     $window.Shutdown(); $window.Dispose()
 } finally { $engine.Dispose() }
-Write-Output "Rendered settings/diagnostics and checked voice toggle in $OutputDirectory"
+Write-Output "Rendered settings/diagnostics in $OutputDirectory"

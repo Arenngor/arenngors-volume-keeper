@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0-beta.2 (unreleased)
+
+- Add an optional, independent ceiling for Windows System Sounds.
+- Remove voice defaults and keep the saved notification ceiling.
+- Skip shared or ambiguous audio sessions and show the reason in Diagnostics.
+
 ## 0.3.0-beta.1
 
 - Prepare the first versioned source repository and shareable release package.
