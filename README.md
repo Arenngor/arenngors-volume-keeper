@@ -4,7 +4,7 @@
 Keep Discord notification sounds below a comfortable volume. An independent,
 lightweight Windows tray app for Discord notifications and optional Windows System Sounds.
 
-**Status: 0.3.0-beta.2 development build.** Windows audio testing is pending;
+**Status: 0.3.0-beta.3 development build.** Windows audio testing is pending;
 see [the test checklist](docs/TESTING.md).
 
 ## Use the app
@@ -14,19 +14,25 @@ Extract a release ZIP before opening anything inside it. Either run
 for your Windows account and create a Start menu shortcut. No administrator
 rights are required. Requires Windows 10/11 with .NET Framework 4.x.
 
-Set **Notification ceiling** and click **Save and apply**. Notifications already
+Set **Notification ceiling** and click **Save settings**. Notifications already
 quieter than the ceiling stay quieter. Mute state is preserved.
 
 To also limit Windows alerts, enable **Cap Windows System Sounds**, choose a
-separate percentage, and click **Save and apply**. This targets the System
+separate percentage, and click **Save settings**. This targets the System
 Sounds mixer entry, not the master volume or other apps. It is off by default
 and suggests 25% when enabled.
 
-The app no longer sets a default voice volume. It skips audio-service sessions
-when Windows reports shared ownership, a shared group or session identifier, or
-multiple sessions from the same process on one output. If Discord mixes pings
-and voice into a single stream without exposing that distinction, Windows
-cannot give the two sounds separate mixer levels. Pause the app if both move.
+**Default Discord voice volume** is optional and off unless enabled. It sets
+each new eligible voice session once, then leaves manual adjustments alone.
+Use **Apply now** to apply the selected default to existing voice sessions.
+The notification and Windows System Sounds caps are independent.
+
+Discord notification and voice sessions can have separate live levels while
+sharing a saved Windows audio identity. This build caps notifications when
+that identifier is the only match, which restores the older notification
+behavior. **Windows may reuse the ping level for voice on restart.** Shared
+process ownership and shared mixer groups are still skipped. An enabled
+voice default can set a fresh voice session to your preferred starting level.
 
 Closing the window leaves the purple volume-bars icon in the notification area
 near the clock. Double-click it for settings; right-click for Pause, Diagnostics,
@@ -43,8 +49,8 @@ audio levels are left alone until you resume.
 - For portable copies, uncheck Start with Windows and save, exit, then delete the
   extracted folder. If you move a portable app, save Start with Windows again to
   refresh its stored executable path.
-- Existing users keep settings in `%LOCALAPPDATA%\DiscordVolumeKeeper`. Old
-  voice preferences are ignored.
+- Existing users keep settings in `%LOCALAPPDATA%\DiscordVolumeKeeper`. Existing
+  explicit voice preferences are honored; missing voice preferences default to off.
 
 ## Diagnostics and bug reports
 

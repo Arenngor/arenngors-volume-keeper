@@ -10,17 +10,20 @@ $candidate.PID=123; $candidate.Group=[Guid]::NewGuid(); $candidate.Identifier='n
 $other=New-Object DiscordKeeper.SessionIdentity
 $other.PID=456; $other.Group=[Guid]::NewGuid(); $other.Identifier='voice'
 $sessions=[DiscordKeeper.SessionIdentity[]]@($candidate,$other)
-Assert-True ($null -eq [DiscordKeeper.NotificationPolicy]::SkipReason($candidate,$sessions)) 'Isolated notification session is eligible'
+Assert-True ($null -eq [DiscordKeeper.NotificationPolicy]::SkipReason($candidate,$sessions,$false)) 'Isolated notification session is eligible'
 $originalGroup=$other.Group
 $other.Group=$candidate.Group
-Assert-True ([DiscordKeeper.NotificationPolicy]::SkipReason($candidate,$sessions) -like 'grouped*') 'Grouped voice and notification sessions are skipped'
+Assert-True ([DiscordKeeper.NotificationPolicy]::SkipReason($candidate,$sessions,$false) -like 'grouped*') 'Grouped voice and notification sessions are skipped'
 $other.Group=$originalGroup
 $other.Identifier=$candidate.Identifier
-Assert-True ([DiscordKeeper.NotificationPolicy]::SkipReason($candidate,$sessions) -like 'shared*') 'Multiple instances of a logical session are skipped'
+Assert-True ($null -eq [DiscordKeeper.NotificationPolicy]::SkipReason($candidate,$sessions,$false)) 'Distinct Discord sessions may share their saved identifier'
+$candidate.IsSystemSounds=$true
+Assert-True ([DiscordKeeper.NotificationPolicy]::SkipReason($candidate,$sessions,$false) -like 'shared*') 'System Sounds retains the shared identifier safeguard'
+$candidate.IsSystemSounds=$false
 $other.Identifier='voice'; $other.PID=$candidate.PID
-Assert-True ([DiscordKeeper.NotificationPolicy]::SkipReason($candidate,$sessions) -like 'multiple*') 'Multiple sessions owned by the same process are skipped'
+Assert-True ([DiscordKeeper.NotificationPolicy]::SkipReason($candidate,$sessions,$false) -like 'multiple*') 'Multiple sessions owned by the same process are skipped'
 $other.PID=456; $candidate.OwnerStatus=1
-Assert-True ([DiscordKeeper.NotificationPolicy]::SkipReason($candidate,$sessions) -like 'shared*') 'Non-exclusive owner status is skipped'
+Assert-True ([DiscordKeeper.NotificationPolicy]::SkipReason($candidate,$sessions,$false) -like 'shared*') 'Non-exclusive owner status is skipped'
 Assert-Near ([DiscordKeeper.NotificationPolicy]::Ceiling(0.8,0.05)) 0.05 'Notification ceiling lowers a loud session'
 Assert-Near ([DiscordKeeper.NotificationPolicy]::Ceiling(0.02,0.05)) 0.02 'Quieter notification remains quieter'
 $targets=New-Object 'System.Collections.Generic.Dictionary[uint32,single]'
@@ -41,13 +44,25 @@ Assert-True (-not $legacy.SystemSoundsCapEnabled -and $legacy.SystemSoundsCapPer
 $systemSettings=[DiscordKeeper.Settings]::FromJson('{"SystemSoundsCapEnabled":true,"SystemSoundsCapPercent":0}')
 Assert-True ($systemSettings.SystemSoundsCapEnabled -and $systemSettings.SystemSoundsCapPercent-eq 0) 'Zero is a valid enabled System Sounds cap'
 $serializer=New-Object System.Web.Script.Serialization.JavaScriptSerializer
-Assert-True (-not $serializer.Serialize($legacy).Contains('VoiceDefault')) 'Saved settings omit obsolete voice preferences'
+Assert-True ($legacy.VoiceDefaultEnabled -and $legacy.VoiceDefaultPercent-eq 42) 'Existing explicit voice settings are restored'
+$roundtrip=[DiscordKeeper.Settings]::FromJson($serializer.Serialize($legacy))
+Assert-True ($roundtrip.VoiceDefaultEnabled -and $roundtrip.VoiceDefaultPercent-eq 42) 'Voice settings persist'
+$fresh=[DiscordKeeper.Settings]::FromJson('{"NotificationCapPercent":15,"SystemSoundsCapEnabled":true,"SystemSoundsCapPercent":25}')
+Assert-True (-not $fresh.VoiceDefaultEnabled -and $fresh.VoiceDefaultPercent-eq 30) 'Beta 2 upgrades leave the voice default off'
+Assert-True ($fresh.SystemSoundsCapEnabled -and $fresh.SystemSoundsCapPercent-eq 25 -and $fresh.NotificationCapPercent-eq 15) 'Beta 2 caps survive the upgrade'
+$voicePolicy=New-Object DiscordKeeper.VoiceDefaults
+Assert-Near ($voicePolicy.Desired('call-a',0.15,0.30)) 0.30 'A new call session gets the optional default'
+$voicePolicy.Commit('call-a')
+Assert-Near ($voicePolicy.Desired('call-a',0.55,0.30)) 0.55 'Manual voice changes survive later events'
+Assert-Near ($voicePolicy.Desired('call-b',0.15,0.30)) 0.30 'A distinct call session gets the default independently'
+$voicePolicy.Reset()
+Assert-Near ($voicePolicy.Desired('call-a',0.55,0.30)) 0.30 'Apply now reinitializes existing voice sessions'
 $rejected=$false
 try { [DiscordKeeper.Settings]::FromJson('{"NotificationCapPercent":101}') | Out-Null } catch { $rejected=$true }
 Assert-True $rejected 'Invalid notification range rejected'
 Assert-True ([DiscordKeeper.SessionRouter]::IsNotificationCandidate('discord --type=utility --utility-sub-type=audio.mojom.AudioService')) 'Audio service remains a notification candidate'
-Assert-True (-not [DiscordKeeper.SessionRouter]::IsNotificationCandidate('discord --type=renderer')) 'Discord renderer is never targeted'
-Assert-True (-not [DiscordKeeper.SessionRouter]::IsNotificationCandidate('discord')) 'Main Discord process is never targeted'
+Assert-True (-not [DiscordKeeper.SessionRouter]::IsNotificationCandidate('discord --type=renderer')) 'Discord renderer is not a notification candidate'
+Assert-True (-not [DiscordKeeper.SessionRouter]::IsNotificationCandidate('discord')) 'Main Discord process is not a notification candidate'
 $notification=New-Object DiscordKeeper.Row
 $notification.PID=123; $notification.Device=1; $notification.Percent=80
 $notification.SkipReason='grouped with another audio session'

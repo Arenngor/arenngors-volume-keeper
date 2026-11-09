@@ -2,7 +2,7 @@
 
 Volume Keeper operates locally. It does not use the network, record audio, inspect
 Discord conversations, or upload telemetry. It reads Discord process command
-lines locally to map Windows audio sessions to notification candidates. It caps eligible Discord notification sessions and, when opted in, the Windows System Sounds session.
+lines locally to map Windows audio sessions to notification candidates. It caps eligible Discord notification sessions. When enabled, it also caps Windows System Sounds or sets a starting level for Discord voice sessions.
 
 Settings live under `%LOCALAPPDATA%\DiscordVolumeKeeper`. Local error logs may
 include error descriptions and paths; inspect them before sharing. Diagnostic

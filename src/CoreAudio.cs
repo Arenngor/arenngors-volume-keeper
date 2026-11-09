@@ -163,7 +163,7 @@ public sealed class Watcher : ISessionEvents, IDeviceEvents, IVolumeEvents, IDis
  void SetMasterVolume(float volume, ref Guid context); void GetMasterVolume(out float volume);
  void SetMute([MarshalAs(UnmanagedType.Bool)] bool mute, ref Guid context); void GetMute([MarshalAs(UnmanagedType.Bool)] out bool mute);
 }
-public class Row { public bool IsSystemSounds; public uint PID; public int Device; public float Percent; public bool Changed; public string Error; public string SkipReason; }
+public class Row { public bool IsSystemSounds; public bool IsVoice; public uint PID; public int Device; public float Percent; public bool Changed; public string Error; public string SkipReason; }
 public sealed class SessionIdentity {
  public uint PID;
  public int OwnerStatus;
@@ -177,28 +177,38 @@ public static class NotificationPolicy {
   cap=systemCap.GetValueOrDefault();
   return systemCap.HasValue;
  }
- public static string SkipReason(SessionIdentity candidate, IEnumerable<SessionIdentity> endpoint) {
+ public static string SkipReason(SessionIdentity candidate, IEnumerable<SessionIdentity> endpoint, bool voice) {
   if(!candidate.IsSystemSounds && candidate.OwnerStatus!=0) return "shared or unknown process ownership";
   foreach(SessionIdentity other in endpoint) {
    if(Object.ReferenceEquals(candidate,other)) continue;
    if(candidate.Group!=Guid.Empty && candidate.Group==other.Group) return "grouped with another audio session";
-   if(!String.IsNullOrEmpty(candidate.Identifier) && candidate.Identifier==other.Identifier) return "shared audio session identifier";
-   if(candidate.PID!=0 && candidate.PID==other.PID) return "multiple sessions from the same process";
+   if(candidate.IsSystemSounds && !String.IsNullOrEmpty(candidate.Identifier) && candidate.Identifier==other.Identifier) return "shared audio session identifier";
+   if(!voice && candidate.PID!=0 && candidate.PID==other.PID) return "multiple sessions from the same process";
   }
   return null;
  }
  public static float Ceiling(float current, float cap) { return Math.Min(current,cap); }
 }
+public sealed class VoiceDefaults {
+ readonly HashSet<string> initialized = new HashSet<string>();
+ public float Desired(string instance, float current, float configured) {
+  return initialized.Contains(instance) ? current : configured;
+ }
+ public void Commit(string instance) { initialized.Add(instance); }
+ public void Reset() { initialized.Clear(); }
+}
 public static class Audio {
+ static readonly VoiceDefaults voiceDefaults = new VoiceDefaults();
+ public static void ResetVoice() { voiceDefaults.Reset(); }
  internal static void Release(object o) { if(o != null && Marshal.IsComObject(o)) Marshal.ReleaseComObject(o); }
  internal static bool IsSystemSounds(IControl control) {
   int result=control.IsSystemSoundsSession();
   Marshal.ThrowExceptionForHR(result);
   return result==0;
  }
- public static Row[] Scan(Dictionary<uint,float> targets, float? systemCap) {
+ public static Row[] Scan(Dictionary<uint,float> targets, float? systemCap, Dictionary<uint,float> voices) {
   var rows = new List<Row>(); object root = null; ICollection devices = null;
-  if(targets.Count==0 && !systemCap.HasValue) return rows.ToArray();
+  if(targets.Count==0 && !systemCap.HasValue && voices.Count==0) return rows.ToArray();
   try {
    root = new Enumerator(); ((IDevices)root).EnumAudioEndpoints(0, 1, out devices);
    uint count; devices.GetCount(out count);
@@ -228,19 +238,31 @@ public static class Audio {
      }
      for(int s=0; s<identities.Count; s++) {
       SessionIdentity identity=identities[s]; float cap;
-      if(!NotificationPolicy.TryGetCap(identity,targets,systemCap,out cap)) continue;
-      var row=new Row { IsSystemSounds=identity.IsSystemSounds, PID=identity.PID, Device=(int)d };
+      bool voice=false;
+      if(!NotificationPolicy.TryGetCap(identity,targets,systemCap,out cap)) {
+       if(identity.IsSystemSounds || !voices.TryGetValue(identity.PID,out cap)) continue;
+       voice=true;
+      }
+      var row=new Row { IsSystemSounds=identity.IsSystemSounds, IsVoice=voice, PID=identity.PID, Device=(int)d };
       rows.Add(row);
       try {
        var volume=(IVolume)controls[s]; float old; volume.GetMasterVolume(out old);
        row.Percent=old*100;
-       row.SkipReason=NotificationPolicy.SkipReason(identity,identities);
+       row.SkipReason=NotificationPolicy.SkipReason(identity,identities,voice);
        if(row.SkipReason!=null) continue;
-       float target=NotificationPolicy.Ceiling(old,cap);
-       if(old-target<=0.00001f) continue;
-       Guid context=Guid.Empty;
-       volume.SetMasterVolume(target,ref context);
-       row.Changed=true;
+       string instance=null;
+       if(voice) {
+        controls[s].GetSessionInstanceIdentifier(out instance);
+        if(String.IsNullOrEmpty(instance)) { row.SkipReason="voice instance identifier unavailable"; continue; }
+       }
+       float target=voice ? voiceDefaults.Desired(instance,old,cap) : NotificationPolicy.Ceiling(old,cap);
+       if(Math.Abs(old-target)>0.00001f) {
+        Guid context=Guid.Empty;
+        volume.SetMasterVolume(target,ref context);
+        row.Changed=true;
+        row.Percent=target*100;
+       }
+       if(voice) voiceDefaults.Commit(instance);
       } catch(COMException ex) { row.Error=ex.Message; }
      }
     } catch(COMException) {

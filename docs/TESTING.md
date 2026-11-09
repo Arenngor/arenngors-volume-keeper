@@ -11,8 +11,8 @@ These are not substitutes for Core Audio tests.
 | --- | --- |
 | Original notification ceiling on the first test PC | User confirmed on earlier builds |
 | Voice Apply now correction | User confirmed on the previous fix build |
-| Notification-only beta policy/settings/routing/diagnostic tests | Pending Windows CI |
-| Notification-only beta settings/diagnostic layout | Pending Windows desktop testing |
+| Beta 3 policy/settings/routing/diagnostic tests | Pending Windows CI |
+| Beta 3 settings/diagnostic layout | Pending Windows desktop testing |
 | Installer dry-run and unmanaged-uninstall rejection | Passed; no installation performed |
 | Installer/update/uninstall full lifecycle | Pending Windows desktop testing |
 | Second independent Windows PC | Pending |
@@ -20,16 +20,16 @@ These are not substitutes for Core Audio tests.
 
 ## Release candidate procedure
 
-1. Start from a new Windows profile or temporarily back up the saved settings.
-   Confirm there is no voice default control and the saved notification ceiling
-   is carried over from an older settings file.
-2. With Discord idle, play a notification and verify its mixer level is capped.
-   Try a notification level below the cap and check it stays there.
-3. Join a call. Set voice to a different level from the cap, trigger a ping,
-   and verify voice stays at the chosen level. Repeat after restarting Discord.
-4. On a setup where Windows reports linked sessions, check the skip reason in
-   Diagnostics and verify neither slider moves. If both sounds share a single
-   indistinguishable stream, pause the app and record the Discord version.
+1. Start from a beta 2 settings file. Confirm both caps survive and the voice
+   default is off. Also test a settings file with an explicit old voice default.
+2. Play a Discord ping with the cap at 15%, then trigger one during a call.
+   A duplicate saved identifier alone must not prevent the cap from applying.
+   Verify sessions with shared ownership or mixer groups are still skipped.
+3. Enable the voice default at 30%, join a call and confirm the starting level.
+   Change the voice slider and play a ping. Voice should stay where you set it.
+   Use Apply now to reset it to 30%, then disable voice defaults and recheck.
+4. Test boot with distinct notification and voice volumes. Windows may restore
+   the same saved level to both; record the result separately from the live test.
 5. Test Pause/Resume, closing to tray, reopening, Exit and duplicate app launches.
 6. Restart Discord, switch outputs, unplug/reconnect a USB headset, sleep/wake and
    restart the Windows Audio service. Check role detection and recovery.

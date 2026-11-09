@@ -1,6 +1,13 @@
 # Changelog
 
-## 0.3.0-beta.2 (unreleased)
+## 0.3.0-beta.3 (unreleased)
+
+- Retain the separate Windows System Sounds cap and saved settings.
+- Restore the optional Discord voice default and Apply now.
+- Cap separate Discord notification sessions even when they share a saved
+  identifier. Windows may restore the ping level to voice after a restart.
+
+## 0.3.0-beta.2
 
 - Add an optional, independent ceiling for Windows System Sounds.
 - Remove voice defaults and keep the saved notification ceiling.

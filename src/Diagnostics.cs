@@ -9,7 +9,7 @@ namespace DiscordKeeper {
 public static class SessionRouter {
  public static bool IsNotificationCandidate(string commandLine) {
   return !String.IsNullOrWhiteSpace(commandLine) &&
-   commandLine.IndexOf("--utility-sub-type=audio.mojom.AudioService",StringComparison.OrdinalIgnoreCase)>=0;
+   commandLine.IndexOf("audio.mojom.AudioService",StringComparison.OrdinalIgnoreCase)>=0;
  }
 }
 public static class DiagnosticReport {
@@ -20,22 +20,22 @@ public static class DiagnosticReport {
   text.AppendLine("Windows: "+Environment.OSVersion.Version+" | "+(Environment.Is64BitProcess?"64-bit":"32-bit")+" process");
   text.AppendLine("Notification ceiling: "+settings.NotificationCapPercent+"%");
   text.AppendLine("System Sounds ceiling: "+(settings.SystemSoundsCapEnabled ? settings.SystemSoundsCapPercent+"%" : "off"));
+  text.AppendLine("Voice default: "+(settings.VoiceDefaultEnabled ? settings.VoiceDefaultPercent+"%" : "off"));
   text.AppendLine();
   text.AppendLine("Role | PID | output index | volume | last operation");
-  Append(text,rows,settings);
+  Append(text,rows);
   if(rows.Length==0) text.AppendLine("No matching sessions yet. Play a Discord notification or a Windows system sound.");
   text.AppendLine();
-  text.AppendLine("Discord audio-service sessions are candidates. Shared or ambiguous sessions are skipped.");
-  text.AppendLine("This is the last event snapshot; Save and apply refreshes it and may change levels.");
+  text.AppendLine("Discord audio-service sessions are notification candidates. Windows may reuse their saved levels on restart.");
+  text.AppendLine("This is the last event snapshot; Apply now refreshes it and may change levels.");
   text.AppendLine("No usernames, executable paths, command lines, conversations or audio are included.");
   return text.ToString();
  }
- static void Append(StringBuilder text,Row[] rows,Settings settings) {
+ static void Append(StringBuilder text,Row[] rows) {
   foreach(Row row in rows) {
    string operation=row.Error!=null?"failed (Core Audio)":row.SkipReason!=null?"skipped: "+row.SkipReason:row.Changed?"changed":"unchanged";
-   string role=row.IsSystemSounds?"System Sounds":row.PID==0?"Output":"Notification";
-   int target=row.IsSystemSounds?settings.SystemSoundsCapPercent:settings.NotificationCapPercent;
-   float volume=row.Changed?target:row.Percent;
+   string role=row.IsSystemSounds?"System Sounds":row.IsVoice?"Voice":row.PID==0?"Output":"Notification";
+   float volume=row.Percent;
    text.AppendLine(String.Format(CultureInfo.InvariantCulture,"{0} | {1} | {2} | {3:0.#}% | {4}",role,row.PID,row.Device,volume,operation));
   }
  }
